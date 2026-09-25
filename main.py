@@ -130,7 +130,7 @@ def spooler_control(gui: UserInterface) -> None:
                 spooler.dc_motor_close_loop_control(current_time)
 
 
-            time.sleep(0.02)
+            time.sleep(0.05)
         except Exception as e:
             print(f"Error in SPOOLER control loop: {e}")
             gui.show_message("Error in SPOOLER control loop",
@@ -166,7 +166,7 @@ def extruder_control(gui: UserInterface) -> None:
                 extruder.temperature_control_loop(current_time)
                 extruder.stepper_control_loop(current_time)
 
-            time.sleep(0.02)
+            time.sleep(0.05)
         except Exception as e:
             print(f"Error in EXTRUDER control loop: {e}")
             gui.show_message("Error in EXTRUDER control loop",
