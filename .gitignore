@@ -164,3 +164,17 @@ cython_debug/
 # Raw data fiiles
 *.csv
 .github/copilot-instructions.md
+
+
+# mas ambientes para ignorar
+fred-venv/
+
+
+__pycache__/
+*.pyc
+*.pyo
+
+.vscode/
+
+*.log
+*.tmp
