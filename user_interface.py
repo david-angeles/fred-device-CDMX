@@ -1,12 +1,9 @@
 from typing import Tuple
 from PyQt5.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QDoubleSpinBox, QSlider, QPushButton, QMessageBox, QLineEdit, QCheckBox, QVBoxLayout, QHBoxLayout
-#from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QPixmap, QImage
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-
-import time
 
 from database import Database
 from fiber_camera import FiberCamera
@@ -491,109 +488,31 @@ class UserInterface():
         QMessageBox.information(self.app.activeWindow(), title, message)
 
     class Plot(FigureCanvas):
-
-        # se usa para mandar los threads.
-        plot_signal = pyqtSignal(float, float, float)
-
         def __init__(self, title: str, y_label: str) -> None:
-
             self.figure = Figure()
             self.axes = self.figure.add_subplot(111)
-
             super(UserInterface.Plot, self).__init__(self.figure)
-
-            self.plot_title = title
-
             self.axes.set_title(title)
             self.axes.set_xlabel("Time (s)")
             self.axes.set_ylabel(y_label)
-
-            self.progress_line, = self.axes.plot(
-                [],
-                [],
-                lw=2,
-                label=title
-            )
-
-            self.setpoint_line, = self.axes.plot(
-                [],
-                [],
-                lw=2,
-                color='r',
-                label=f"Target {title}"
-            )
-
-            # Create legend only once
-            self.legend = self.axes.legend()
-
+            self.progress_line, = self.axes.plot([], [], lw=2, label=title)
+            self.setpoint_line, = self.axes.plot([], [], lw=2, color='r',
+                                                 label=f'Target {title}')
+            self.axes.legend()
             self.x_data = []
             self.y_data = []
             self.setpoint_data = []
-
-            # Maximum GUI refresh rate 5 Hz
-            self.last_draw_time = 0.0
-            self.draw_interval = 0.20
-
-            self.plot_signal.connect(self._update_plot_gui)
-
-
-        def update_plot(
-            self,
-            x: float,
-            y: float,
-            setpoint: float
-        ) -> None:
-
-            self.plot_signal.emit(
-                float(x),
-                float(y),
-                float(setpoint)
-            )
-
-
-        def _update_plot_gui(
-            self,
-            x: float,
-            y: float,
-            setpoint: float
-        ) -> None:
-
-            # Store every sample
+        def update_plot(self, x: float, y: float, setpoint: float) -> None:
             self.x_data.append(x)
             self.y_data.append(y)
             self.setpoint_data.append(setpoint)
-
-            # Update the data internally
-            self.progress_line.set_data(
-                self.x_data,
-                self.y_data
-            )
-
-            self.setpoint_line.set_data(
-                self.x_data,
-                self.setpoint_data
-            )
-
-            # para que no dibuje más rapido de 5 Hz
-            now = time.monotonic()
-
-            if now - self.last_draw_time < self.draw_interval:
-                return
-
-            self.last_draw_time = now
-
-            legend_texts = self.legend.get_texts()
-
-            if len(legend_texts) > 0:
-                legend_texts[0].set_text(
-                    f"{self.plot_title}: {y:.2f}"
-                )
-
-            # Rescale axes
+            self.progress_line.set_label(f"{self.axes.get_title()}: {y:.2f}")
+            self.axes.legend()
+            self.progress_line.set_data(self.x_data, self.y_data)
+            self.setpoint_line.set_data(self.x_data, self.setpoint_data)
             self.axes.relim()
             self.axes.autoscale_view()
-
-            self.draw_idle()
+            self.draw()
 
     def start_gui(self) -> None:
         timer = QTimer()
