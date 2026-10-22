@@ -1,8 +1,11 @@
 import yaml
 import csv
+from threading import RLock
 
 class Database():
     """Class to store the raw data and generate the CSV file"""
+    # Shared by the encoder and MCP3008; initialization also resets the encoder.
+    spi_lock = RLock()
     time_readings = []
     
     temperature_timestamps = []  # For future temperature measurements
@@ -178,4 +181,3 @@ class Database():
         with open("calibration.yaml", "w") as file:
             calibration_data[field] = float(value)
             yaml.dump(calibration_data, file)
-

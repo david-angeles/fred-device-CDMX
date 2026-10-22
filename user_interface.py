@@ -1,7 +1,8 @@
 from typing import Tuple
-from PyQt5.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QDoubleSpinBox, QSlider, QPushButton, QMessageBox, QLineEdit, QCheckBox, QVBoxLayout, QHBoxLayout
-from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QPixmap, QImage
+from threading import Lock
+from PyQt5.QtWidgets import QApplication, QWidget, QGridLayout, QLabel, QDoubleSpinBox, QSlider, QPushButton, QMessageBox, QLineEdit, QCheckBox, QVBoxLayout, QHBoxLayout, QDialog, QSpacerItem, QSizePolicy
+from PyQt5.QtCore import QTimer, Qt, QRect
+from PyQt5.QtGui import QPixmap, QImage, QPainter
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -53,6 +54,31 @@ class UserInterface():
         self.processed_image_title.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.layout.addWidget(self.processed_image_title, 8, 8)
         self.layout.addWidget(self.fiber_camera.processed_image, 9, 8, 6, 1)
+
+        self._camera_widgets = (
+            (self.raw_image_title, 1, 8, 1, 1),
+            (self.fiber_camera.raw_image, 2, 8, 6, 1),
+            (self.processed_image_title, 8, 8, 1, 1),
+            (self.fiber_camera.processed_image, 9, 8, 6, 1),
+        )
+        self._camera_spacers = []
+        self.camera_window = QDialog(self.window)
+        self.camera_window.setWindowTitle("Fiber Camera")
+        self.camera_window.setLayout(QVBoxLayout())
+        self.camera_window.finished.connect(self.restore_camera_images)
+        self.canny_image_title = QLabel("Detected Edges (Canny)")
+        self.canny_image_title.setStyleSheet(self.raw_image_title.styleSheet())
+        self.canny_image_title.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.camera_window.layout().addWidget(self.canny_image_title)
+        self.camera_window.layout().addWidget(self.fiber_camera.canny_image)
+        self._camera_images = (self.fiber_camera.raw_image,
+                               self.fiber_camera.processed_image,
+                               self.fiber_camera.canny_image)
+        self._camera_image_policies = [image.sizePolicy() for image in self._camera_images]
+        for image in self._camera_images:
+            image.setCursor(Qt.PointingHandCursor)
+            image.mousePressEvent = self.open_camera_window
+            image.paintEvent = lambda event, label=image: self.paint_camera_image(label, event)
 
         # --- 滤波器复选框和滑块，放在处理图下方 ---
         filter_row_start = 15  # 处理图最后一行是14
@@ -149,6 +175,62 @@ class UserInterface():
         self.window.setFixedSize(1600, 1000)
         self.window.setAutoFillBackground(True)
 
+    def paint_camera_image(self, label, event) -> None:
+        if label.window() is not self.camera_window:
+            QLabel.paintEvent(label, event)
+            return
+        pixmap = label.pixmap()
+        if pixmap is None or pixmap.isNull():
+            return
+        # Scale only the display, using the original pixels on every repaint.
+        area = label.contentsRect()
+        size = pixmap.size().scaled(area.size(), Qt.KeepAspectRatio)
+        target = QRect(0, 0, size.width(), size.height())
+        target.moveCenter(area.center())
+        # Area averaging keeps one-pixel edges visible in small previews.
+        if label is self.fiber_camera.canny_image and size.width() < pixmap.width():
+            pixmap = pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        painter = QPainter(label)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        painter.drawPixmap(target, pixmap, pixmap.rect())
+        painter.end()
+
+    def open_camera_window(self, event) -> None:
+        if event.button() != Qt.LeftButton or self.camera_window.isVisible():
+            return
+        # Move the existing viewers; keep the same capture and refresh timer.
+        for index, (widget, row, column, row_span, column_span) in enumerate(self._camera_widgets):
+            # Empty spacers preserve the main layout without drawing images.
+            spacer = QSpacerItem(widget.width(), widget.height(),
+                                 QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self._camera_spacers.append(spacer)
+            self.layout.removeWidget(widget)
+            self.layout.addItem(spacer, row, column, row_span, column_span)
+            self.camera_window.layout().insertWidget(index, widget)
+            widget.show()
+        first_open = not self.camera_window.testAttribute(Qt.WA_Resized)
+        if first_open:
+            self.camera_window.adjustSize()
+        for image in self._camera_images:
+            image.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+            self.camera_window.layout().setStretchFactor(image, 1)
+        if first_open:
+            available_size = self.app.primaryScreen().availableGeometry().size()
+            self.camera_window.layout().activate()
+            self.camera_window.resize(self.camera_window.size().boundedTo(available_size * 0.9))
+        self.camera_window.show()
+
+    def restore_camera_images(self) -> None:
+        for spacer in self._camera_spacers:
+            self.layout.removeItem(spacer)
+        self._camera_spacers.clear()
+        for image, policy in zip(self._camera_images, self._camera_image_policies):
+            image.setSizePolicy(policy)
+        for widget, row, column, row_span, column_span in self._camera_widgets:
+            self.camera_window.layout().removeWidget(widget)
+            self.layout.addWidget(widget, row, column, row_span, column_span)
+            widget.show()
+
     # --- 滤波器和滑块的槽函数 ---
     def toggle_erode_filter(self, state):
         self.fiber_camera.erode_enabled = bool(state)
@@ -181,6 +263,9 @@ class UserInterface():
         motor_plot = self.Plot("DC Spooling Motor", "Speed (RPM)")
         temperature_plot = self.Plot("Temperature", "Temperature (C)")
         diameter_plot = self.Plot("Diameter", "Diameter (mm)")
+        
+        diameter_plot.setpoint_line.set_visible(False)
+        diameter_plot.legend = diameter_plot.axes.legend(handles=[diameter_plot.progress_line])
 
         self.layout.addWidget(binary_checkbox, 10, 1)
         self.layout.addWidget(diameter_plot, 2, 0, 8, 4)
@@ -498,21 +583,39 @@ class UserInterface():
             self.progress_line, = self.axes.plot([], [], lw=2, label=title)
             self.setpoint_line, = self.axes.plot([], [], lw=2, color='r',
                                                  label=f'Target {title}')
-            self.axes.legend()
+            self.legend = self.axes.legend()
             self.x_data = []
             self.y_data = []
             self.setpoint_data = []
+            self._pending_data = []
+            self._data_lock = Lock()
+            self._refresh_timer = QTimer(self)
+            self._refresh_timer.timeout.connect(self.refresh_plot)
+            self._refresh_timer.start(200)
+
         def update_plot(self, x: float, y: float, setpoint: float) -> None:
-            self.x_data.append(x)
-            self.y_data.append(y)
-            self.setpoint_data.append(setpoint)
-            self.progress_line.set_label(f"{self.axes.get_title()}: {y:.2f}")
-            self.axes.legend()
+            # Hardware threads only queue data; Qt/Matplotlib stay in the GUI thread.
+            with self._data_lock:
+                self._pending_data.append((x, y, setpoint))
+
+        def refresh_plot(self) -> None:
+            with self._data_lock:
+                pending_data = self._pending_data
+                self._pending_data = []
+            if not pending_data:
+                return
+            # Keep every sample, but redraw at most five times per second.
+            for x, y, setpoint in pending_data:
+                self.x_data.append(x)
+                self.y_data.append(y)
+                self.setpoint_data.append(setpoint)
+            self.progress_line.set_label(f"{self.axes.get_title()}: {self.y_data[-1]:.2f}")
+            self.legend.get_texts()[0].set_text(self.progress_line.get_label())
             self.progress_line.set_data(self.x_data, self.y_data)
             self.setpoint_line.set_data(self.x_data, self.setpoint_data)
             self.axes.relim()
             self.axes.autoscale_view()
-            self.draw()
+            self.draw_idle()
 
     def start_gui(self) -> None:
         timer = QTimer()

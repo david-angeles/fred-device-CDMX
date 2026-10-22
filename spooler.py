@@ -46,40 +46,52 @@ class Spooler:
 
     def initialize_encoder(self) -> None:
         """Initialize the encoder and SPI"""
-        self.spi = spidev.SpiDev()
-        self.spi.open(0, 0)
-        self.spi.max_speed_hz = 50000
-        
-        # Initialize encoder
-        GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.LOW)
-        self.spi.xfer2([0x88, 0x03])
-        GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.HIGH)
-        
-        # Clear encoder count
-        self.clear_encoder_count()
+        with Database.spi_lock:
+            self.spi = spidev.SpiDev()
+            self.spi.open(0, 0)
+            self.spi.max_speed_hz = 50000
+
+            # Initialize encoder
+            GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.LOW)
+            try:
+                self.spi.xfer2([0x88, 0x03])
+            finally:
+                GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.HIGH)
+
+            # Clear encoder count
+            self.clear_encoder_count()
         
     def clear_encoder_count(self) -> None:
         """Clear the encoder count"""
-        GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.LOW)
-        self.spi.xfer2([0x98, 0x00, 0x00, 0x00, 0x00])
-        GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.HIGH)
-        
-        time.sleep(0.0001)
-        
-        GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.LOW)
-        self.spi.xfer2([0xE0])
-        GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.HIGH)
+        with Database.spi_lock:
+            GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.LOW)
+            try:
+                self.spi.xfer2([0x98, 0x00, 0x00, 0x00, 0x00])
+            finally:
+                GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.HIGH)
+
+            time.sleep(0.0001)
+
+            GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.LOW)
+            try:
+                self.spi.xfer2([0xE0])
+            finally:
+                GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.HIGH)
     
     def read_encoder(self) -> int:
         """Read the encoder position"""
-        GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.LOW)
-        self.spi.xfer2([0x60])
-        count_1 = self.spi.xfer2([0x00])
-        count_2 = self.spi.xfer2([0x00])
-        count_3 = self.spi.xfer2([0x00])
-        count_4 = self.spi.xfer2([0x00])
-        GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.HIGH)
-        
+        with Database.spi_lock:
+            GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.LOW)
+            try:
+                # Preserve the original encoder read sequence inside the shared lock.
+                self.spi.xfer2([0x60])
+                count_1 = self.spi.xfer2([0x00])
+                count_2 = self.spi.xfer2([0x00])
+                count_3 = self.spi.xfer2([0x00])
+                count_4 = self.spi.xfer2([0x00])
+            finally:
+                GPIO.output(Spooler.SLAVE_SELECT_ENC, GPIO.HIGH)
+
         count_value = (count_1[0] << 24) + (count_2[0] << 16) + (count_3[0] << 8) + count_4[0]
         return count_value
 

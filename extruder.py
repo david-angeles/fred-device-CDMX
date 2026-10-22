@@ -95,14 +95,16 @@ class Thermistor:
 
     def __init__(self, cs_pin: int = board.D8) -> None:
         """Initialize the SPI for thermistor temperature readings"""
-        spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI) #intialize SPI bus
-        cs = digitalio.DigitalInOut(cs_pin) # Create the cs (chip select)
-        mcp = MCP.MCP3008(spi, cs) # Create the mcp object
-        self.channel_0 = AnalogIn(mcp, MCP.P0) # Create analog inputs connected to the input pins on the MCP3008
+        with Database.spi_lock:
+            spi = busio.SPI(clock=board.SCK, MISO=board.MISO, MOSI=board.MOSI) #intialize SPI bus
+            cs = digitalio.DigitalInOut(cs_pin) # Create the cs (chip select)
+            mcp = MCP.MCP3008(spi, cs) # Create the mcp object
+            self.channel_0 = AnalogIn(mcp, MCP.P0) # Create analog inputs connected to the input pins on the MCP3008
 
     def get_voltage(self) -> float:
         """Get the voltage from the thermistor"""
-        return self.channel_0.voltage
+        with Database.spi_lock:
+            return self.channel_0.voltage
      
 
     def get_temperature(self) -> float:

@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 class FiberCamera(QWidget):
     use_binary_for_edges = True
-    CALIBRATION_DIAMETER_MM = 0.94
+    CALIBRATION_DIAMETER_MM = 0.5
 
     def __init__(self, target_diameter: QDoubleSpinBox,
                  gui: "UserInterface") -> None:
@@ -108,32 +108,49 @@ class FiberCamera(QWidget):
         return segments
 
     @classmethod
-    def _diameter_pixels(cls, lines):
+    def _diameter_pixels(cls, lines, edges):
+        """Median perpendicular width across the central part of the fiber."""
         segments = cls._segments(lines)
 
-        if len(segments) <= 1:
+        if not segments or edges is None or min(edges.shape[:2]) < 3:
             return 0.0
 
-        left_positions = [
-            min(x0, x1)
-            for x0, _, x1, _ in segments
-        ]
-
-        right_positions = [
-            max(x0, x1)
-            for x0, _, x1, _ in segments
-        ]
-
-        diameter = (
-            (max(left_positions) - min(left_positions))
-            +
-            (max(right_positions) - min(right_positions))
-        ) / 2.0
-
-        if not np.isfinite(diameter) or diameter <= 0:
+        # Hough supplies the direction, not the distance between endpoints.
+        x0, y0, x1, y1 = max(
+            segments, key=lambda s: (s[2] - s[0])**2 + (s[3] - s[1])**2
+        )
+        dx, dy = float(x1 - x0), float(y1 - y0)
+        length = np.hypot(dx, dy)
+        if length <= 0:
             return 0.0
 
-        return float(diameter)
+        # Scan columns for horizontal fibers, rows for vertical fibers.
+        profiles = edges if abs(dx) >= abs(dy) else edges.T
+        normal_scale = max(abs(dx), abs(dy)) / length
+        center = (profiles.shape[1] - 1) / 2.0
+        half_span = 0.4 * (min(edges.shape[:2]) - 1)
+        sample_positions = np.unique(np.linspace(
+            center - half_span, center + half_span, 31, dtype=int
+        ))
+        widths = []
+        for position in sample_positions:
+            pixels = np.flatnonzero(profiles[:, position])
+            breaks = np.flatnonzero(np.diff(pixels) > 1)
+            # Exactly two edge runs: reject missing edges and clutter.
+            if breaks.size != 1:
+                continue
+            split = int(breaks[0]) + 1
+            first_edge = (float(pixels[0]) + float(pixels[split - 1])) / 2.0
+            second_edge = (float(pixels[split]) + float(pixels[-1])) / 2.0
+            width = (second_edge - first_edge) * normal_scale
+            if width >= 2.0:
+                widths.append(width)
+
+        if len(widths) < len(sample_positions) // 2 + 1:
+            return 0.0
+
+        # Spatial median suppresses local edge noise without delaying changes.
+        return float(np.median(widths))
 
     def camera_loop(self) -> None:
         try:
@@ -222,8 +239,8 @@ class FiberCamera(QWidget):
 
         return edges, binary_frame
 
-    def get_fiber_diameter(self, lines):
-        diameter_pixels = self._diameter_pixels(lines)
+    def get_fiber_diameter(self, lines, edges):
+        diameter_pixels = self._diameter_pixels(lines, edges)
 
         if diameter_pixels <= 0:
             return 0.0
@@ -238,8 +255,8 @@ class FiberCamera(QWidget):
 
         return diameter_pixels * coefficient
 
-    def get_fiber_diameter_in_pixels(self, lines):
-        return self._diameter_pixels(lines)
+    def get_fiber_diameter_in_pixels(self, lines, edges):
+        return self._diameter_pixels(lines, edges)
 
     def plot_lines(self, frame, lines):
         for x0, y0, x1, y1 in self._segments(lines):
@@ -268,12 +285,12 @@ class FiberCamera(QWidget):
             # Use the same ROI used during normal measurement.
             frame = self._crop_frame(frame)
 
-            _, _, detected_lines = \
+            edges, _, detected_lines = \
                 self._detect_lines(frame)
 
             diameter_pixels = \
                 self.get_fiber_diameter_in_pixels(
-                    detected_lines
+                    detected_lines, edges
                 )
 
             if (
@@ -294,7 +311,7 @@ class FiberCamera(QWidget):
             return False
 
         average_diameter = float(
-            np.mean(valid_samples)
+            np.median(valid_samples)
         )
 
         if (
@@ -326,7 +343,7 @@ class FiberCamera(QWidget):
             float(new_coefficient)
 
         print(
-            f"Average width of wire: "
+            f"Median width of wire: "
             f"{average_diameter:.3f} pixels"
         )
 
@@ -352,19 +369,23 @@ class FiberCamera(QWidget):
 
             frame = self._crop_frame(frame)
 
-            _, _, detected_lines = \
+            edges, _, detected_lines = \
                 self._detect_lines(frame)
 
             current_diameter = \
                 self.get_fiber_diameter(
-                    detected_lines
+                    detected_lines, edges
                 )
 
             self.gui.diameter_plot.update_plot(
                 current_time,
-                current_diameter,
+                current_diameter if current_diameter > 0 else float("nan"),
                 self.target_diameter.value()
             )
+
+            # A failed detection is a gap in the plot, not a zero diameter.
+            if current_diameter <= 0:
+                return
 
             Database.camera_timestamps.append(
                 current_time
